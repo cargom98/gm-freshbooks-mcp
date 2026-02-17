@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+
+# FreshBooks tokens
+.freshbooks_token.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.kiro/
+
+# OS
+.DS_Store
+Thumbs.db
+*.csv
+
+# MCP config (contains sensitive data)
+mcp.json
+
+# Kiro MCP Manager - Sensitive configuration files
+.kiro/settings/
