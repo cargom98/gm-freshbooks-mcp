@@ -27,6 +27,7 @@ auth_code = None
 access_token = None
 refresh_token = None
 account_id = None
+business_id = None
 auth_server = None
 server_ready = threading.Event()
 
@@ -138,7 +139,7 @@ def load_token() -> Optional[dict]:
 
 def ensure_authenticated() -> bool:
     """Ensure we have a valid access token"""
-    global access_token, refresh_token, account_id
+    global access_token, refresh_token, account_id, business_id
     
     # Try to load existing token
     token_data = load_token()
@@ -154,7 +155,9 @@ def ensure_authenticated() -> bool:
         if response.status_code == 200:
             me_data = response.json()
             if me_data['response'].get('business_memberships'):
-                account_id = me_data['response']['business_memberships'][0]['business']['account_id']
+                business_membership = me_data['response']['business_memberships'][0]
+                account_id = business_membership['business']['account_id']
+                business_id = business_membership['business']['id']
             return True
         
         # Try to refresh token
@@ -171,7 +174,9 @@ def ensure_authenticated() -> bool:
                 if response.status_code == 200:
                     me_data = response.json()
                     if me_data['response'].get('business_memberships'):
-                        account_id = me_data['response']['business_memberships'][0]['business']['account_id']
+                        business_membership = me_data['response']['business_memberships'][0]
+                        account_id = business_membership['business']['account_id']
+                        business_id = business_membership['business']['id']
                 return True
     
     # Need new authorization
@@ -195,7 +200,9 @@ def ensure_authenticated() -> bool:
     if response.status_code == 200:
         me_data = response.json()
         if me_data['response'].get('business_memberships'):
-            account_id = me_data['response']['business_memberships'][0]['business']['account_id']
+            business_membership = me_data['response']['business_memberships'][0]
+            account_id = business_membership['business']['account_id']
+            business_id = business_membership['business']['id']
     
     return True
 
@@ -304,11 +311,113 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="get_expense",
+            description="Get details of a specific expense by ID",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "expense_id": {
+                        "type": "string",
+                        "description": "The FreshBooks expense ID"
+                    }
+                },
+                "required": ["expense_id"]
+            }
+        ),
+        Tool(
             name="list_projects",
             description="Get list of projects from FreshBooks",
             inputSchema={
                 "type": "object",
                 "properties": {},
+            }
+        ),
+        Tool(
+            name="upload_attachment",
+            description="Upload a file (receipt image or PDF) to FreshBooks. Returns a JWT token that can be used to attach to an expense.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Local file path to the receipt image or PDF to upload"
+                    }
+                },
+                "required": ["file_path"]
+            }
+        ),
+        Tool(
+            name="attach_receipt_to_expense",
+            description="Attach a previously uploaded receipt to an existing expense using the JWT token from upload_attachment",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "expense_id": {
+                        "type": "string",
+                        "description": "The FreshBooks expense ID to attach the receipt to"
+                    },
+                    "jwt": {
+                        "type": "string",
+                        "description": "The JWT token returned from upload_attachment"
+                    },
+                    "media_type": {
+                        "type": "string",
+                        "description": "Media type of the attachment (e.g., 'image/png', 'image/jpeg', 'application/pdf')"
+                    }
+                },
+                "required": ["expense_id", "jwt", "media_type"]
+            }
+        ),
+        Tool(
+            name="create_expense",
+            description="Create a new expense with optional receipt attachment",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "amount": {
+                        "type": "string",
+                        "description": "Expense amount (e.g., '1078.67')"
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "Expense date in YYYY-MM-DD format"
+                    },
+                    "categoryid": {
+                        "type": "number",
+                        "description": "Category ID for the expense"
+                    },
+                    "vendor": {
+                        "type": "string",
+                        "description": "Vendor name"
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Notes or description"
+                    },
+                    "jwt": {
+                        "type": "string",
+                        "description": "Optional JWT token from upload_attachment to attach a receipt"
+                    },
+                    "media_type": {
+                        "type": "string",
+                        "description": "Media type if attaching receipt (e.g., 'application/pdf')"
+                    }
+                },
+                "required": ["amount", "date", "categoryid"]
+            }
+        ),
+        Tool(
+            name="delete_expense",
+            description="Delete an expense by ID",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "expense_id": {
+                        "type": "string",
+                        "description": "The FreshBooks expense ID to delete"
+                    }
+                },
+                "required": ["expense_id"]
             }
         ),
     ]
@@ -352,8 +461,117 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         result = make_api_request(endpoint)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     
+    elif name == "get_expense":
+        expense_id = arguments.get("expense_id")
+        result = make_api_request(f"expenses/expenses/{expense_id}")
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    
     elif name == "list_projects":
         result = make_api_request(f"projects/business_id/{account_id}")
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    
+    elif name == "upload_attachment":
+        if not ensure_authenticated():
+            raise Exception("Failed to authenticate")
+        
+        if not account_id:
+            raise Exception("Account ID not available")
+        
+        file_path = arguments.get("file_path")
+        if not os.path.exists(file_path):
+            raise Exception(f"File not found: {file_path}")
+        
+        # Upload the file using account_id (e.g., "p7aeZr")
+        url = f'https://api.freshbooks.com/uploads/account/{account_id}/attachments'
+        headers = {'Authorization': f'Bearer {access_token}'}
+        
+        with open(file_path, 'rb') as f:
+            files = {'content': (os.path.basename(file_path), f, 'application/pdf')}
+            response = requests.post(url, headers=headers, files=files)
+        
+        response.raise_for_status()
+        result = response.json()
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    
+    elif name == "attach_receipt_to_expense":
+        expense_id = arguments.get("expense_id")
+        jwt_token = arguments.get("jwt")
+        media_type = arguments.get("media_type")
+        
+        # Get the existing expense first
+        expense_data = make_api_request(f"expenses/expenses/{expense_id}")
+        expense = expense_data.get('response', {}).get('result', {}).get('expense', {})
+        
+        # Update the expense with the attachment
+        expense['attachment'] = {
+            'jwt': jwt_token,
+            'media_type': media_type,
+            'expenseid': int(expense_id)
+        }
+        
+        # Update the expense
+        update_data = {'expense': expense}
+        result = make_api_request(
+            f"expenses/expenses/{expense_id}?include[]=attachment",
+            method='PUT',
+            data=update_data
+        )
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    
+    elif name == "create_expense":
+        amount = arguments.get("amount")
+        date = arguments.get("date")
+        categoryid = arguments.get("categoryid")
+        vendor = arguments.get("vendor", "")
+        notes = arguments.get("notes", "")
+        jwt_token = arguments.get("jwt")
+        media_type = arguments.get("media_type")
+        
+        expense_data = {
+            "expense": {
+                "amount": {
+                    "amount": amount
+                },
+                "date": date,
+                "categoryid": categoryid,
+                "vendor": vendor,
+                "notes": notes,
+                "staffid": 1
+            }
+        }
+        
+        # Add attachment if provided
+        if jwt_token and media_type:
+            expense_data["expense"]["attachment"] = {
+                "jwt": jwt_token,
+                "media_type": media_type,
+                "expenseid": None
+            }
+        
+        # Create the expense
+        endpoint = "expenses/expenses"
+        if jwt_token:
+            endpoint += "?include[]=attachment"
+        
+        result = make_api_request(endpoint, method='POST', data=expense_data)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    
+    elif name == "delete_expense":
+        expense_id = arguments.get("expense_id")
+        
+        # FreshBooks doesn't support DELETE, we need to update vis_state to 1 (archived/deleted)
+        # Create minimal update payload
+        update_data = {
+            "expense": {
+                "vis_state": 1
+            }
+        }
+        
+        result = make_api_request(
+            f"expenses/expenses/{expense_id}",
+            method='PUT',
+            data=update_data
+        )
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     
     else:

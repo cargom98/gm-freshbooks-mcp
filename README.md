@@ -114,8 +114,38 @@ Once configured, the MCP server provides these tools:
 - `get_client` - Get specific client by ID
 - `list_invoices` - Get all invoices
 - `get_invoice` - Get specific invoice by ID
-- `list_expenses` - Get all expenses
+- `list_expenses` - Get all expenses (with pagination)
 - `list_projects` - Get all projects
+- `upload_attachment` - Upload a receipt image or PDF file
+- `attach_receipt_to_expense` - Attach an uploaded receipt to an expense
+
+### Attaching Receipts to Expenses
+
+The server supports a two-step process for attaching receipts:
+
+1. **Upload the receipt file:**
+   ```
+   Tool: upload_attachment
+   Parameters:
+     - file_path: Local path to the receipt (PNG, JPEG, or PDF)
+   Returns: JWT token and attachment details
+   ```
+
+2. **Attach to expense:**
+   ```
+   Tool: attach_receipt_to_expense
+   Parameters:
+     - expense_id: The FreshBooks expense ID
+     - jwt: JWT token from upload_attachment
+     - media_type: File type (e.g., 'image/png', 'image/jpeg', 'application/pdf')
+   ```
+
+**Example workflow:**
+1. Upload receipt: `upload_attachment(file_path="receipt.png")`
+2. Get JWT from response
+3. Attach to expense: `attach_receipt_to_expense(expense_id="123", jwt="...", media_type="image/png")`
+
+**Note:** The upload_attachment feature requires your FreshBooks app to have the appropriate OAuth permissions. If you receive a 403 Forbidden error, check your app settings in the [FreshBooks Developer Portal](https://my.freshbooks.com/#/developer) to ensure it has full expense management permissions.
 
 ### Authentication Flow
 
@@ -249,6 +279,7 @@ freshbooks-mcp/
 │   └── setup_cloudflared.sh  # Cloudflare tunnel setup script
 └── tests/
     ├── test_api.py           # API integration tests
+    ├── test_attach_receipt.py # Receipt attachment tests
     ├── test_auth_flow.py     # OAuth flow tests
     ├── test_clients.py       # Client API tests
     ├── test_cloudflared_auth.py
